@@ -44,7 +44,6 @@
 
   #inputText { height: 110px; }
 
-  /* Editor layout with synced gutter */
   .editor-wrapper {
     display: flex;
     border: 1px solid var(--border);
@@ -56,7 +55,7 @@
   }
 
   .gutter {
-    width: 48px;
+    width: 52px;
     background: #1e1e1e;
     color: var(--line-num-color);
     font-family: Consolas, monospace;
@@ -68,7 +67,12 @@
     overflow: hidden;
     user-select: none;
     border-right: 1px solid #333;
-    white-space: pre;
+    flex-shrink: 0;
+  }
+
+  .gutter-line {
+    display: block;
+    box-sizing: border-box;
   }
 
   #output {
@@ -79,11 +83,40 @@
     resize: none;
     outline: none;
     white-space: pre;
+    word-break: normal;
     overflow-x: auto;
     overflow-y: scroll;
   }
 
-  .toolbar { margin: 10px 0; }
+  #output.wrapped {
+    white-space: pre-wrap;
+    word-break: break-word;
+    overflow-x: hidden;
+  }
+
+  #lineMeasure {
+    position: absolute;
+    visibility: hidden;
+    height: auto;
+    width: auto;
+    white-space: pre-wrap;
+    word-break: break-word;
+    font-family: Consolas, monospace;
+    font-size: 14px;
+    line-height: 20px;
+    padding: 0;
+    margin: 0;
+    border: none;
+  }
+
+  .toolbar {
+    margin: 10px 0;
+    display: flex;
+    align-items: center;
+    flex-wrap: wrap;
+    gap: 6px;
+  }
+
   button {
     background: #444c56;
     color: #e6edf3;
@@ -91,12 +124,17 @@
     padding: 8px 16px;
     border-radius: 6px;
     cursor: pointer;
-    margin-right: 6px;
     font-size: 14px;
   }
   button:hover { background: #505a66; }
   .active { background: #2f6f44; border-color: #4fa66f; }
-  .danger { background: #5a2a2a; border-color: #734040; }
+
+  /* Push dangerous button to far right */
+  .danger {
+    background: #5a2a2a;
+    border-color: #734040;
+    margin-left: auto;
+  }
   .danger:hover { background: #6b3232; }
 
   #stats { margin: 10px 0; color: var(--text-muted); font-size: 13px; }
@@ -122,43 +160,55 @@
 
 <div class="section-title">Collected Text (Bucket)</div>
 <div class="editor-wrapper">
-  <div class="gutter" id="lineGutter">1</div>
+  <div class="gutter" id="lineGutter"></div>
   <textarea id="output" placeholder="Collected snippets appear here. Direct typing and editing supported." spellcheck="false"></textarea>
 </div>
+<div id="lineMeasure"></div>
 
 <div class="toolbar">
   <button type="button" onclick="copyAll()">Copy All</button>
   <button type="button" onclick="downloadText()">Download TXT</button>
+  <button type="button" id="wrapBtn" onclick="toggleWrap()">Wrap: OFF</button>
   <button type="button" class="danger" onclick="clearAll()">Clear All</button>
 </div>
 
 <script>
 const STORAGE_KEY = "copyPadContent";
+const WRAP_KEY = "copyPadWrapEnabled";
 let quickPasteEnabled = false;
+let wrapEnabled = false;
 
 const inputEl = document.getElementById("inputText");
 const outputEl = document.getElementById("output");
 const gutterEl = document.getElementById("lineGutter");
 const statsEl = document.getElementById("stats");
 const quickPasteBtn = document.getElementById("quickPasteBtn");
+const wrapBtn = document.getElementById("wrapBtn");
+const lineMeasure = document.getElementById("lineMeasure");
 
 window.addEventListener("DOMContentLoaded", () => {
   const saved = localStorage.getItem(STORAGE_KEY);
   if (saved !== null) {
     outputEl.value = saved;
   }
+
+  wrapEnabled = localStorage.getItem(WRAP_KEY) === "true";
+  applyWrapState();
+
   syncEditor();
 });
 
-// Synchronize scroll between gutter and output
 outputEl.addEventListener("scroll", () => {
   gutterEl.scrollTop = outputEl.scrollTop;
 });
 
-// Input updates
 outputEl.addEventListener("input", () => {
   saveData();
   syncEditor();
+});
+
+window.addEventListener("resize", () => {
+  if (wrapEnabled) updateLineNumbers();
 });
 
 function syncEditor() {
@@ -167,12 +217,40 @@ function syncEditor() {
 }
 
 function updateLineNumbers() {
-  const lineCount = outputEl.value.split("\n").length;
-  const numbers = [];
-  for (let i = 1; i <= lineCount; i++) {
-    numbers.push(i);
+  const lines = outputEl.value.split("\n");
+  const fragment = document.createDocumentFragment();
+
+  if (!wrapEnabled) {
+    lines.forEach((_, i) => {
+      const span = document.createElement("span");
+      span.className = "gutter-line";
+      span.textContent = i + 1;
+      fragment.appendChild(span);
+    });
+  } else {
+    const style = window.getComputedStyle(outputEl);
+    const paddingLeft = parseFloat(style.paddingLeft);
+    const paddingRight = parseFloat(style.paddingRight);
+    const contentWidth = outputEl.clientWidth - paddingLeft - paddingRight;
+
+    lineMeasure.style.width = `${contentWidth}px`;
+
+    lines.forEach((line, i) => {
+      const span = document.createElement("span");
+      span.className = "gutter-line";
+      span.textContent = i + 1;
+
+      lineMeasure.textContent = line || " ";
+      const measuredHeight = lineMeasure.offsetHeight;
+      span.style.height = `${measuredHeight}px`;
+
+      fragment.appendChild(span);
+    });
   }
-  gutterEl.textContent = numbers.join("\n");
+
+  gutterEl.innerHTML = "";
+  gutterEl.appendChild(fragment);
+  gutterEl.scrollTop = outputEl.scrollTop;
 }
 
 function updateStats() {
@@ -202,13 +280,25 @@ function saveData() {
   localStorage.setItem(STORAGE_KEY, outputEl.value);
 }
 
+function toggleWrap() {
+  wrapEnabled = !wrapEnabled;
+  localStorage.setItem(WRAP_KEY, wrapEnabled);
+  applyWrapState();
+  updateLineNumbers();
+}
+
+function applyWrapState() {
+  outputEl.classList.toggle("wrapped", wrapEnabled);
+  wrapBtn.textContent = `Wrap: ${wrapEnabled ? "ON" : "OFF"}`;
+  wrapBtn.classList.toggle("active", wrapEnabled);
+}
+
 function toggleQuickPaste() {
   quickPasteEnabled = !quickPasteEnabled;
   quickPasteBtn.textContent = `Quick Paste: ${quickPasteEnabled ? "ON" : "OFF"}`;
   quickPasteBtn.classList.toggle("active", quickPasteEnabled);
 }
 
-// Global paste listener: ignores paste inside already-focused inputs
 document.addEventListener("paste", (e) => {
   if (!quickPasteEnabled) return;
   if (e.target === inputEl || e.target === outputEl) return;
@@ -247,7 +337,8 @@ function downloadText() {
 }
 
 function clearAll() {
-  if (!outputEl.value || !confirm("Delete all collected text?")) return;
+  if (!outputEl.value) return;
+  if (!confirm("Are you sure you want to delete all collected text? This action cannot be undone.")) return;
   outputEl.value = "";
   localStorage.removeItem(STORAGE_KEY);
   syncEditor();
