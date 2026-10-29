@@ -1,0 +1,348 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>CopyPad</title>
+
+<style>
+  :root {
+    --bg-main: #1e1e1e;
+    --bg-box: #252526;
+    --border: #555;
+    --text-main: #e0e0e0;
+    --text-muted: #9aa0a6;
+    --line-num-color: #6a737d;
+  }
+
+  body {
+    background: var(--bg-main);
+    color: var(--text-main);
+    font-family: "Segoe UI", Arial, sans-serif;
+    max-width: 1200px;
+    margin: 20px auto;
+    padding: 20px;
+  }
+
+  h1 { margin-bottom: 8px; }
+  .hint { color: var(--text-muted); margin-bottom: 16px; font-size: 14px; line-height: 1.5; }
+  .section-title { margin: 12px 0 6px; font-size: 16px; font-weight: 600; }
+
+  textarea {
+    width: 100%;
+    background: var(--bg-box);
+    color: #fff;
+    border: 1px solid var(--border);
+    border-radius: 6px;
+    padding: 10px;
+    box-sizing: border-box;
+    font-family: Consolas, monospace;
+    font-size: 14px;
+    line-height: 20px;
+    resize: vertical;
+  }
+
+  #inputText { height: 110px; }
+
+  .editor-wrapper {
+    display: flex;
+    border: 1px solid var(--border);
+    border-radius: 6px;
+    background: var(--bg-box);
+    overflow: hidden;
+    height: 380px;
+    resize: vertical;
+  }
+
+  .gutter {
+    width: 52px;
+    background: #1e1e1e;
+    color: var(--line-num-color);
+    font-family: Consolas, monospace;
+    font-size: 14px;
+    line-height: 20px;
+    text-align: right;
+    padding: 10px 8px 10px 0;
+    box-sizing: border-box;
+    overflow: hidden;
+    user-select: none;
+    border-right: 1px solid #333;
+    flex-shrink: 0;
+  }
+
+  .gutter-line {
+    display: block;
+    box-sizing: border-box;
+  }
+
+  #output {
+    flex: 1;
+    height: 100%;
+    border: none;
+    border-radius: 0;
+    resize: none;
+    outline: none;
+    white-space: pre;
+    word-break: normal;
+    overflow-x: auto;
+    overflow-y: scroll;
+  }
+
+  #output.wrapped {
+    white-space: pre-wrap;
+    word-break: break-word;
+    overflow-x: hidden;
+  }
+
+  #lineMeasure {
+    position: absolute;
+    visibility: hidden;
+    height: auto;
+    width: auto;
+    white-space: pre-wrap;
+    word-break: break-word;
+    font-family: Consolas, monospace;
+    font-size: 14px;
+    line-height: 20px;
+    padding: 0;
+    margin: 0;
+    border: none;
+  }
+
+  .toolbar {
+    margin: 10px 0;
+    display: flex;
+    align-items: center;
+    flex-wrap: wrap;
+    gap: 6px;
+  }
+
+  button {
+    background: #444c56;
+    color: #e6edf3;
+    border: 1px solid #5a6470;
+    padding: 8px 16px;
+    border-radius: 6px;
+    cursor: pointer;
+    font-size: 14px;
+  }
+  button:hover { background: #505a66; }
+  .active { background: #2f6f44; border-color: #4fa66f; }
+
+  /* Push dangerous button to far right */
+  .danger {
+    background: #5a2a2a;
+    border-color: #734040;
+    margin-left: auto;
+  }
+  .danger:hover { background: #6b3232; }
+
+  #stats { margin: 10px 0; color: var(--text-muted); font-size: 13px; }
+</style>
+</head>
+
+<body>
+
+<h1>📝 CopyPad</h1>
+<div class="hint">
+  Ctrl+Enter inside Input Area adds text. Quick Paste appends any global clipboard paste without replacing current focus.
+</div>
+
+<div class="section-title">Input Area</div>
+<textarea id="inputText" placeholder="Paste incoming snippets here..."></textarea>
+
+<div class="toolbar">
+  <button type="button" onclick="addText()">Add to Bucket</button>
+  <button type="button" id="quickPasteBtn" onclick="toggleQuickPaste()">Quick Paste: OFF</button>
+</div>
+
+<div id="stats">Lines: 1 | Words: 0 | Characters: 0</div>
+
+<div class="section-title">Collected Text (Bucket)</div>
+<div class="editor-wrapper">
+  <div class="gutter" id="lineGutter"></div>
+  <textarea id="output" placeholder="Collected snippets appear here. Direct typing and editing supported." spellcheck="false"></textarea>
+</div>
+<div id="lineMeasure"></div>
+
+<div class="toolbar">
+  <button type="button" onclick="copyAll()">Copy All</button>
+  <button type="button" onclick="downloadText()">Download TXT</button>
+  <button type="button" id="wrapBtn" onclick="toggleWrap()">Wrap: OFF</button>
+  <button type="button" class="danger" onclick="clearAll()">Clear All</button>
+</div>
+
+<script>
+const STORAGE_KEY = "copyPadContent";
+const WRAP_KEY = "copyPadWrapEnabled";
+let quickPasteEnabled = false;
+let wrapEnabled = false;
+
+const inputEl = document.getElementById("inputText");
+const outputEl = document.getElementById("output");
+const gutterEl = document.getElementById("lineGutter");
+const statsEl = document.getElementById("stats");
+const quickPasteBtn = document.getElementById("quickPasteBtn");
+const wrapBtn = document.getElementById("wrapBtn");
+const lineMeasure = document.getElementById("lineMeasure");
+
+window.addEventListener("DOMContentLoaded", () => {
+  const saved = localStorage.getItem(STORAGE_KEY);
+  if (saved !== null) {
+    outputEl.value = saved;
+  }
+
+  wrapEnabled = localStorage.getItem(WRAP_KEY) === "true";
+  applyWrapState();
+
+  syncEditor();
+});
+
+outputEl.addEventListener("scroll", () => {
+  gutterEl.scrollTop = outputEl.scrollTop;
+});
+
+outputEl.addEventListener("input", () => {
+  saveData();
+  syncEditor();
+});
+
+window.addEventListener("resize", () => {
+  if (wrapEnabled) updateLineNumbers();
+});
+
+function syncEditor() {
+  updateLineNumbers();
+  updateStats();
+}
+
+function updateLineNumbers() {
+  const lines = outputEl.value.split("\n");
+  const fragment = document.createDocumentFragment();
+
+  if (!wrapEnabled) {
+    lines.forEach((_, i) => {
+      const span = document.createElement("span");
+      span.className = "gutter-line";
+      span.textContent = i + 1;
+      fragment.appendChild(span);
+    });
+  } else {
+    const style = window.getComputedStyle(outputEl);
+    const paddingLeft = parseFloat(style.paddingLeft);
+    const paddingRight = parseFloat(style.paddingRight);
+    const contentWidth = outputEl.clientWidth - paddingLeft - paddingRight;
+
+    lineMeasure.style.width = `${contentWidth}px`;
+
+    lines.forEach((line, i) => {
+      const span = document.createElement("span");
+      span.className = "gutter-line";
+      span.textContent = i + 1;
+
+      lineMeasure.textContent = line || " ";
+      const measuredHeight = lineMeasure.offsetHeight;
+      span.style.height = `${measuredHeight}px`;
+
+      fragment.appendChild(span);
+    });
+  }
+
+  gutterEl.innerHTML = "";
+  gutterEl.appendChild(fragment);
+  gutterEl.scrollTop = outputEl.scrollTop;
+}
+
+function updateStats() {
+  const text = outputEl.value;
+  const lines = text.length ? text.split("\n").length : 0;
+  const words = text.trim() ? text.trim().split(/\s+/).length : 0;
+  const chars = text.length;
+  statsEl.textContent = `Lines: ${lines.toLocaleString()} | Words: ${words.toLocaleString()} | Characters: ${chars.toLocaleString()}`;
+}
+
+function appendText(text) {
+  if (!text) return;
+  const current = outputEl.value;
+  outputEl.value = current ? current + "\n\n" + text : text;
+  saveData();
+  syncEditor();
+  outputEl.scrollTop = outputEl.scrollHeight;
+}
+
+function addText() {
+  appendText(inputEl.value);
+  inputEl.value = "";
+  inputEl.focus();
+}
+
+function saveData() {
+  localStorage.setItem(STORAGE_KEY, outputEl.value);
+}
+
+function toggleWrap() {
+  wrapEnabled = !wrapEnabled;
+  localStorage.setItem(WRAP_KEY, wrapEnabled);
+  applyWrapState();
+  updateLineNumbers();
+}
+
+function applyWrapState() {
+  outputEl.classList.toggle("wrapped", wrapEnabled);
+  wrapBtn.textContent = `Wrap: ${wrapEnabled ? "ON" : "OFF"}`;
+  wrapBtn.classList.toggle("active", wrapEnabled);
+}
+
+function toggleQuickPaste() {
+  quickPasteEnabled = !quickPasteEnabled;
+  quickPasteBtn.textContent = `Quick Paste: ${quickPasteEnabled ? "ON" : "OFF"}`;
+  quickPasteBtn.classList.toggle("active", quickPasteEnabled);
+}
+
+document.addEventListener("paste", (e) => {
+  if (!quickPasteEnabled) return;
+  if (e.target === inputEl || e.target === outputEl) return;
+
+  const pastedText = (e.clipboardData || window.clipboardData).getData("text");
+  if (pastedText) {
+    e.preventDefault();
+    appendText(pastedText);
+  }
+});
+
+inputEl.addEventListener("keydown", (e) => {
+  if (e.ctrlKey && e.key === "Enter") {
+    e.preventDefault();
+    addText();
+  }
+});
+
+function copyAll() {
+  if (!outputEl.value) return;
+  navigator.clipboard.writeText(outputEl.value).then(() => {
+    statsEl.textContent += " — (Copied to clipboard)";
+  });
+}
+
+function downloadText() {
+  const blob = new Blob([outputEl.value], { type: "text/plain" });
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement("a");
+  a.href = url;
+  a.download = "copypad.txt";
+  document.body.appendChild(a);
+  a.click();
+  document.body.removeChild(a);
+  URL.revokeObjectURL(url);
+}
+
+function clearAll() {
+  if (!outputEl.value) return;
+  if (!confirm("Are you sure you want to delete all collected text? This action cannot be undone.")) return;
+  outputEl.value = "";
+  localStorage.removeItem(STORAGE_KEY);
+  syncEditor();
+}
+</script>
+</body>
+</html>
